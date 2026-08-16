@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import random
+import sys
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -9,6 +11,7 @@ except ImportError:
     ZoneInfo = None
 
 import aiohttp
+from aiohttp import web
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     Application,
@@ -19,14 +22,18 @@ from telegram.ext import (
     filters,
 )
 
-# ================= LOGGING SETUP =================
+# ================= LOGGING =================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
 # ================= CONFIGURATION =================
-TELEGRAM_BOT_TOKEN = "8768395001:AAEQgiRBFSzYE3lmIv726mOScQTs98QlnmE"  # Replace with token from @BotFather
+# Set this as an Environment Variable on Render or paste your new token here
+TELEGRAM_BOT_TOKEN = os.environ.get(
+    "TELEGRAM_BOT_TOKEN", "8768395001:AAEQgiRBFSzYE3lmIv726mOScQTs98QlnmE"
+)
+
 BASE_URL = "https://creamyverse.com/api"
 APP_SECRET = "6bb9bf539edf2ca7c15f801e8c67c7157f3e743b94088f0aeb51a2c8cfa7a062"
 HEADERS = {"Content-Type": "application/json", "x-app-secret": APP_SECRET}
@@ -39,7 +46,6 @@ TARGET_HOUR = 5
 TARGET_MINUTE = 30
 TARGET_TZ = "Asia/Kolkata"
 
-# Conversation states
 NAME, PHONE, EMAIL, OTP, TRAIT, RUN_CHOICE = range(6)
 
 
@@ -132,13 +138,19 @@ async def api_get(endpoint, token=None, params=None):
 
 # ================= GAME EXECUTION =================
 async def execute_game_run(chat_id, token, user_id, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=chat_id, text="🚀 *Starting Game Sequence...*", parse_mode="Markdown")
+    await context.bot.send_message(
+        chat_id=chat_id, text="🚀 *Starting Game Sequence...*", parse_mode="Markdown"
+    )
 
     for level in (1, 2, 3):
         w, h = LEVEL_GRIDS[level]
         start = LEVEL_STARTS[level]
 
-        await context.bot.send_message(chat_id=chat_id, text=f"🎯 *Level {level}*: Requesting seed...", parse_mode="Markdown")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"🎯 *Level {level}*: Requesting seed from server...",
+            parse_mode="Markdown",
+        )
         await asyncio.sleep(random.uniform(0.5, 1.2))
 
         code, sr = await api_post("/game/start", {"level": level}, token)
@@ -146,17 +158,22 @@ async def execute_game_run(chat_id, token, user_id, context: ContextTypes.DEFAUL
         seed = sr.get("seed")
 
         if not game_key:
-            await context.bot.send_message(chat_id=chat_id, text=f"❌ Level {level} start failed: `{sr}`", parse_mode="Markdown")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ Level {level} start failed: `{sr}`",
+                parse_mode="Markdown",
+            )
             continue
 
         path = solve_path(w, h, start, seed)
         if not path:
-            await context.bot.send_message(chat_id=chat_id, text=f"❌ Solver failed to find Hamiltonian path for Level {level}.")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ Solver failed to find Hamiltonian path for Level {level}.",
+            )
             continue
 
-        # Human-like delay simulation
-        play_delay = random.uniform(1.0, 2.0)
-        await asyncio.sleep(play_delay)
+        await asyncio.sleep(random.uniform(1.0, 2.0))
 
         code, submit_r = await api_post(
             "/game/submit",
@@ -179,13 +196,12 @@ async def execute_game_run(chat_id, token, user_id, context: ContextTypes.DEFAUL
         if level != 3:
             await asyncio.sleep(random.uniform(1.0, 2.0))
 
-    # Leaderboard Check
     await asyncio.sleep(1.0)
     _, lb = await api_get("/game/leaderboard", token, {"limit": 10, "userId": user_id})
     board = lb.get("board", [])
     caller = lb.get("caller")
 
-    lb_text = "📊 *Leaderboard Top 10:*\n"
+    lb_text = "📊 *Leaderboard Top 10:*\n\n"
     for i, p in enumerate(board[:10], 1):
         lb_text += f"`#{p.get('rank', i)}` {p.get('name')} ({p.get('best_ms', '?')}ms)\n"
 
@@ -195,10 +211,10 @@ async def execute_game_run(chat_id, token, user_id, context: ContextTypes.DEFAUL
     await context.bot.send_message(chat_id=chat_id, text=lb_text, parse_mode="Markdown")
 
 
-# ================= HANDLERS =================
+# ================= TELEGRAM HANDLERS =================
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *Welcome to Creamyverse Automation Bot!*\n\nPlease send your *Full Name*:",
+        "👋 *Welcome to Creamyverse Bot!*\n\nPlease reply with your *Full Name*:",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -207,7 +223,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text.strip()
-    await update.message.reply_text("📱 Enter your *Phone Number* (with country code if needed):", parse_mode="Markdown")
+    await update.message.reply_text("📱 Enter your *Phone Number*:", parse_mode="Markdown")
     return PHONE
 
 
@@ -219,7 +235,7 @@ async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["email"] = update.message.text.strip()
-    await update.message.reply_text("🔄 Sending OTP request to server...")
+    await update.message.reply_text("🔄 Sending OTP request to Creamyverse...")
 
     code, resp = await api_post(
         "/auth/register",
@@ -230,7 +246,7 @@ async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         },
     )
 
-    await update.message.reply_text(f"📩 OTP dispatched. Please reply with the *OTP Code* received:", parse_mode="Markdown")
+    await update.message.reply_text("📩 OTP dispatched. Please enter the *OTP Code* received:", parse_mode="Markdown")
     return OTP
 
 
@@ -243,7 +259,10 @@ async def handle_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     token = resp.get("token")
     if not token:
-        await update.message.reply_text(f"❌ Verification failed: `{resp.get('message', 'Invalid OTP')}`. Type /start to retry.", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"❌ Verification failed: `{resp.get('message', 'Invalid OTP')}`. Type /start to retry.",
+            parse_mode="Markdown",
+        )
         return ConversationHandler.END
 
     context.user_data["token"] = token
@@ -252,7 +271,11 @@ async def handle_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     traits = [["music_paglu", "gamer"], ["chilled", "coder"]]
     reply_markup = ReplyKeyboardMarkup(traits, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(f"✅ Logged in as *{user.get('name')}*!\n\n🎭 Select your trait:", reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text(
+        f"✅ Logged in as *{user.get('name')}*!\n\n🎭 Select your trait:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown",
+    )
     return TRAIT
 
 
@@ -265,7 +288,11 @@ async def handle_trait(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     choices = [["⚡ Run Now", "⏰ Schedule for 05:30 AM IST"]]
     reply_markup = ReplyKeyboardMarkup(choices, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(f"Trait set to *{trait}*.\n\nChoose execution mode:", reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text(
+        f"Trait set to *{trait}*.\n\nChoose execution mode:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown",
+    )
     return RUN_CHOICE
 
 
@@ -303,7 +330,24 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ================= MAIN ENTRY =================
+# ================= RENDER DUMMY WEB SERVER =================
+async def dummy_health_check(request):
+    return web.Response(text="Bot is running!")
+
+
+async def start_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server_app = web.Application()
+    server_app.router.add_get("/", dummy_health_check)
+    server_app.router.add_get("/health", dummy_health_check)
+    runner = web.AppRunner(server_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health check server listening on port {port}")
+
+
+# ================= MAIN RUNNER =================
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -321,7 +365,13 @@ def main():
     )
 
     app.add_handler(conv_handler)
-    print("Bot is up and polling...")
+
+    async def post_init(application):
+        await start_dummy_server()
+
+    app.post_init = post_init
+
+    logger.info("Bot is up and polling...")
     app.run_polling()
 
 
